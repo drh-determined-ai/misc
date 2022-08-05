@@ -16,10 +16,15 @@ def start_timer():
     start_time = time.time()
 
 
+def start_timer_and_print(local_msg):
+    print("\n" + local_msg)
+    start_timer()
+
+
 def end_timer_and_print(local_msg):
     torch.cuda.synchronize()
     end_time = time.time()
-    print("\n" + local_msg)
+    print(local_msg)
     print("Total execution time = {:.3f} sec".format(end_time - start_time))
     print(
         "Max memory used by tensors = {} bytes".format(
@@ -63,9 +68,9 @@ def time_training(
     # So we can check for changes in the scale factor
     scale = scaler.get_scale()
 
-    start_timer()
-    for epoch in range(epochs):
-        for i, (input, target) in enumerate(zip(data, targets)):
+    start_timer_and_print("** Mixed precision start **" if amp_enabled else "** Default precision start **")
+    for epoch in range(1, 1+epochs):
+        for b, (input, target) in enumerate(zip(data, targets), 1):
             with torch.autocast(
                 device_type="cuda", dtype=torch.float16, enabled=amp_enabled
             ):
@@ -83,8 +88,8 @@ def time_training(
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
 
-            if new_scale := scaler.get_scale() != scale:
-                print(f"{i=} : scale changed from {scale} to {new_scale}")
+            if (new_scale := scaler.get_scale()) != scale:
+                print(f"{epoch=}, {b=} : scale changed from {scale} to {new_scale}")
                 scale = new_scale
 
             # Inspect/modify gradients (e.g., clipping) may be done here
@@ -94,7 +99,7 @@ def time_training(
             opt.zero_grad(
                 set_to_none=True  # can modestly improve performance
             )
-    end_timer_and_print("Mixed precision:" if amp_enabled else "Default precision:")
+    end_timer_and_print("** Mixed precision end **" if amp_enabled else "** Default precision end**")
     checkpoint = {
         "model": net.state_dict(),
         "optimizer": opt.state_dict(),
@@ -107,9 +112,12 @@ def time_training(
 BATCH_SIZE = 512
 SIZE = 4096
 NUM_LAYERS = 3
-NUM_BATCHES = 50
+NUM_BATCHES = 20
 EPOCHS = 3
 
+# One-indexed
+BIG_BATCH_NB = 5
+TINY_BATCH_NB = 10
 
 def main(
     batch_size=BATCH_SIZE,
@@ -127,6 +135,9 @@ def main(
     targets = [
         torch.randn(batch_size, out_size, device="cuda") for _ in range(num_batches)
     ]
+
+    data[BIG_BATCH_NB-1] = data[BIG_BATCH_NB-1] + 3e4
+    data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * 2e-17
 
     loss_fn = torch.nn.MSELoss().cuda()
 
