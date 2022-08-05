@@ -54,6 +54,7 @@ def time_training(
     scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
 
     if checkpoint is not None:
+        print("\nReloading checkpoint...")
         net.load_state_dict(checkpoint["model"])
         opt.load_state_dict(checkpoint["optimizer"])
         if amp_enabled and "scaler" in checkpoint:
@@ -67,8 +68,16 @@ def time_training(
             ):
                 output = net(input)
                 loss = loss_fn(output, target)
-            print(f"{amp_enabled=}, {epoch=}, {loss=}")
+                if amp_enabled:
+                    # output is float16 because linear layers autocast to float16.
+                    assert output.dtype is torch.float16
+                    # loss is float32 because mse_loss layers autocast to float32.
+                    assert loss.dtype is torch.float32
+                else:
+                    assert output.dtype is torch.float32
+                    assert loss.dtype is torch.float32
 
+            # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
 
             # Inspect/modify gradients (e.g., clipping) may be done here
@@ -114,12 +123,8 @@ def main(
     loss_fn = torch.nn.MSELoss().cuda()
 
     default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False)
-    print(default_cp)
-    print("\nReloading checkpoint...")
     default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False, default_cp)
     mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True)
-    print(mixed_cp)
-    print("\nReloading checkpoint...")
     mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True, mixed_cp)
 
 
