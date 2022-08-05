@@ -60,9 +60,12 @@ def time_training(
         if amp_enabled and "scaler" in checkpoint:
             scaler.load_state_dict(checkpoint["scaler"])
 
+    # So we can check for changes in the scale factor
+    scale = scaler.get_scale()
+
     start_timer()
     for epoch in range(epochs):
-        for input, target in zip(data, targets):
+        for i, (input, target) in enumerate(zip(data, targets)):
             with torch.autocast(
                 device_type="cuda", dtype=torch.float16, enabled=amp_enabled
             ):
@@ -79,6 +82,10 @@ def time_training(
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
+
+            if new_scale := scaler.get_scale() != scale:
+                print(f"{i=} : scale changed from {scale} to {new_scale}")
+                scale = new_scale
 
             # Inspect/modify gradients (e.g., clipping) may be done here
 
@@ -111,6 +118,7 @@ def main(
     num_layers=NUM_LAYERS,
     num_batches=NUM_BATCHES,
     epochs=EPOCHS,
+    checkpoint=False,
 ):
     # Creates data in default precision.
     # The same data is used for both default and mixed precision trials below.
@@ -123,9 +131,11 @@ def main(
     loss_fn = torch.nn.MSELoss().cuda()
 
     default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False)
-    default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False, default_cp)
+    if checkpoint:
+        default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False, default_cp)
     mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True)
-    mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True, mixed_cp)
+    if checkpoint:
+        mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True, mixed_cp)
 
 
 if __name__ == "__main__":
