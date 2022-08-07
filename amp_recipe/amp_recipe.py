@@ -56,7 +56,11 @@ def time_training(
 ):
     net = make_model(in_size, out_size, num_layers)
     opt = torch.optim.SGD(net.parameters(), lr=0.001)
-    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+    scaler = torch.cuda.amp.GradScaler(
+            init_scale=INIT_SCALE,
+            growth_interval=2,
+            enabled=amp_enabled
+    )
 
     if checkpoint is not None:
         print("\nReloading checkpoint...")
@@ -94,6 +98,14 @@ def time_training(
 
             # Inspect/modify gradients (e.g., clipping) may be done here
 
+            # From PyTorch documentation
+            # :meth:`step` carries out the following two operations:
+            # 1.  Internally invokes ``unscale_(optimizer)`` (unless :meth:`unscale_` was explicitly called for ``optimizer``
+            #     earlier in the iteration).  As part of the :meth:`unscale_`, gradients are checked for infs/NaNs.
+            # 2.  If no inf/NaN gradients are found, invokes ``optimizer.step()`` using the unscaled
+            #     gradients.  Otherwise, ``optimizer.step()`` is skipped to avoid corrupting the params.
+            scaler.unscale_(opt)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             scaler.step(opt)
             scaler.update()
             opt.zero_grad(
@@ -119,6 +131,10 @@ EPOCHS = 3
 BIG_BATCH_NB = 5
 TINY_BATCH_NB = 10
 
+SMALLEST_POS_SUBNORM = 2e-14 / 1024
+LARGEST_NORM = 65504
+INIT_SCALE = 65536.0
+
 def main(
     batch_size=BATCH_SIZE,
     in_size=SIZE,
@@ -131,13 +147,16 @@ def main(
     # Creates data in default precision.
     # The same data is used for both default and mixed precision trials below.
     # You don't need to manually change inputs' dtype when enabling mixed precision.
-    data = [torch.randn(batch_size, in_size, device="cuda") for _ in range(num_batches)]
+    data = [
+        torch.randn(batch_size, in_size, device="cuda")
+        for _ in range(num_batches)]
     targets = [
-        torch.randn(batch_size, out_size, device="cuda") for _ in range(num_batches)
+        torch.randn(batch_size, out_size, device="cuda")
+        for _ in range(num_batches)
     ]
 
-    data[BIG_BATCH_NB-1] = data[BIG_BATCH_NB-1] + 3e4
-    data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * 2e-17
+    data[BIG_BATCH_NB-1] = data[BIG_BATCH_NB-1] + LARGEST_NORM#/INIT_SCALE
+    data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * SMALLEST_POS_SUBNORM/INIT_SCALE
 
     loss_fn = torch.nn.MSELoss().cuda()
 
