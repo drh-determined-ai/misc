@@ -1,7 +1,11 @@
 # https://pytorch.org/tutorials/recipes/recipes/amp_recipe.html
 
+import numpy as np
 import torch, time, gc
 
+SEED = 2334
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 
 # Timing utilities
 start_time = None
@@ -58,8 +62,8 @@ def time_training(
     opt = torch.optim.SGD(net.parameters(), lr=0.001)
     scaler = torch.cuda.amp.GradScaler(
             init_scale=INIT_SCALE,
-            growth_interval=2,
-            enabled=amp_enabled
+            growth_interval=GROWTH_INTERVAL,
+            enabled=amp_enabled,
     )
 
     if checkpoint is not None:
@@ -88,6 +92,7 @@ def time_training(
                 else:
                     assert output.dtype is torch.float32
                     assert loss.dtype is torch.float32
+            print(f"{epoch=}, {b=} : loss={loss.item()}")
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
@@ -105,6 +110,9 @@ def time_training(
             # 2.  If no inf/NaN gradients are found, invokes ``optimizer.step()`` using the unscaled
             #     gradients.  Otherwise, ``optimizer.step()`` is skipped to avoid corrupting the params.
             scaler.unscale_(opt)
+            if scaler.is_enabled():
+                if found_inf := int(sum(scaler._found_inf_per_device(opt).values()).item()):
+                    print(f"{epoch=}, {b=} : {found_inf=}")
             # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             scaler.step(opt)
             scaler.update()
@@ -121,11 +129,11 @@ def time_training(
     return checkpoint
 
 
-BATCH_SIZE = 512
-SIZE = 4096
+BATCH_SIZE = 512//4
+SIZE = 4096//1000
 NUM_LAYERS = 3
-NUM_BATCHES = 20
-EPOCHS = 3
+NUM_BATCHES = 10
+EPOCHS = 15
 
 # One-indexed
 BIG_BATCH_NB = 5
@@ -133,7 +141,8 @@ TINY_BATCH_NB = 10
 
 SMALLEST_POS_SUBNORM = 2e-14 / 1024
 LARGEST_NORM = 65504
-INIT_SCALE = 65536.0
+INIT_SCALE = 8.0  # 65536.0
+GROWTH_INTERVAL = 2000
 
 def main(
     batch_size=BATCH_SIZE,
@@ -156,7 +165,7 @@ def main(
     ]
 
     data[BIG_BATCH_NB-1] = data[BIG_BATCH_NB-1] + LARGEST_NORM#/INIT_SCALE
-    data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * SMALLEST_POS_SUBNORM/INIT_SCALE
+    #data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * SMALLEST_POS_SUBNORM/INIT_SCALE
 
     loss_fn = torch.nn.MSELoss().cuda()
 
