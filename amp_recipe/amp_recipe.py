@@ -45,7 +45,18 @@ def make_model(in_size, out_size, num_layers):
     layers.append(torch.nn.Linear(in_size, out_size))
     return torch.nn.Sequential(*tuple(layers)).cuda()
 
-
+def _train(net, loss_fn, input_, target, amp_enabled=False):
+    output = net(input_)
+    loss = loss_fn(output, target)
+    if amp_enabled:
+        # output is float16 because linear layers autocast to float16.
+        assert output.dtype is torch.float16
+        # loss is float32 because mse_loss layers autocast to float32.
+        assert loss.dtype is torch.float32
+    else:
+        assert output.dtype is torch.float32
+        assert loss.dtype is torch.float32
+    return output, loss
 
 def time_training(
     in_size,
@@ -78,20 +89,12 @@ def time_training(
 
     start_timer_and_print("** Mixed precision start **" if amp_enabled else "** Default precision start **")
     for epoch in range(1, 1+epochs):
-        for b, (input, target) in enumerate(zip(data, targets), 1):
-            with torch.autocast(
-                device_type="cuda", dtype=torch.float16, enabled=amp_enabled
-            ):
-                output = net(input)
-                loss = loss_fn(output, target)
-                if amp_enabled:
-                    # output is float16 because linear layers autocast to float16.
-                    assert output.dtype is torch.float16
-                    # loss is float32 because mse_loss layers autocast to float32.
-                    assert loss.dtype is torch.float32
-                else:
-                    assert output.dtype is torch.float32
-                    assert loss.dtype is torch.float32
+        for b, (input_, target) in enumerate(zip(data, targets), 1):
+            if amp_enabled:
+                with torch.cuda.amp.autocast():
+                    output, loss = _train(net, loss_fn, input_, target, amp_enabled=True)
+            else:
+                output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
             print(f"{epoch=}, {b=} : loss={loss.item()}")
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
