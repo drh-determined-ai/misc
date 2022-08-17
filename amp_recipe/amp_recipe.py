@@ -1,7 +1,13 @@
 # https://pytorch.org/tutorials/recipes/recipes/amp_recipe.html
 
+from typing import List, Tuple
+
 import numpy as np
 import torch, time, gc
+
+
+import pytorch_onevar_model as onevar
+
 
 SEED = 2334
 torch.manual_seed(SEED)
@@ -9,6 +15,55 @@ np.random.seed(SEED)
 
 # Timing utilities
 start_time = None
+
+#FIXME: need a better name
+class MyDataset(onevar.OnesDataset):
+    def __init__(self, stage_lens: List[int], stages: List[str]) -> None:
+        assert len(stage_lens) == len(stages)
+        self.stages = stages
+        self.total_len = sum(stage_lens)
+        stage_start_idx = [sum(stage_lens[:i]) for i in range(len(stage_lens))]
+        assert stage_start_idx[-1] + stage_lens[-1] == self.total_len
+        self.stage_stop_idx = stage_start_idx[1:]
+        self.stage_stop_idx.append(self.total_len)  # This is so np.searchsorted works
+        assert self.stage_stop_idx[-1] == self.total_len
+        print(f"Created {self.__class__.__name__} with stage stop indices {self.stage_stop_idx}")
+
+    def __len__(self) -> int:
+        return self.total_len
+
+    def _get_stage(self, index: int) -> str:
+        stage_idx = np.searchsorted(self.stage_stop_idx, index, side="left")
+        #print(f"{stage_idx=} for {index=}")
+        stage = self.stages[stage_idx]
+        return stage
+
+    def __getitem__(self, index: int) -> Tuple:
+        stage = self._get_stage(index)
+        return self._get_stage_item(stage)
+
+    def _get_stage_item(self, stage) -> Tuple:
+        if stage.startswith("one"):
+            x = 1
+        elif stage.startswith("zero"):
+            x = 0
+        elif stage == "small":
+            x = 2e-14
+        elif stage == "large":
+            x = 2e4
+        else:
+            raise ValueError(f"Unrecognized {self.__class__.__name__} stage {stage}")
+        y = x
+        return (
+            torch.Tensor([float(x)]).cuda(),
+            torch.Tensor([float(y)]).cuda()
+        )
+
+
+def get_data_loader() -> torch.utils.data.DataLoader:
+    dataset = MyDataset([5, 1, 4], ["ones", "large", "ones"])
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=1)
+    return data_loader
 
 
 def start_timer():
@@ -64,12 +119,12 @@ def time_training(
     num_layers,
     epochs,
     loss_fn,
-    data,
-    targets,
+    data_loader,
     amp_enabled=True,
     checkpoint=None,
 ):
-    net = make_model(in_size, out_size, num_layers)
+    #net = make_model(in_size, out_size, num_layers)
+    net = torch.nn.Linear(1, 1, bias=False).cuda()
     opt = torch.optim.SGD(net.parameters(), lr=0.001)
     scaler = torch.cuda.amp.GradScaler(
             init_scale=INIT_SCALE,
@@ -89,19 +144,21 @@ def time_training(
 
     start_timer_and_print("** Mixed precision start **" if amp_enabled else "** Default precision start **")
     for epoch in range(1, 1+epochs):
-        for b, (input_, target) in enumerate(zip(data, targets), 1):
+        for b, ((input_, target),) in enumerate(zip(data_loader), 1):
+            stage = data_loader.dataset._get_stage(b-1)
+            print(f"{epoch=}, {b=}, {stage=} : input={input_.item()}, target={target.item()}")
             if amp_enabled:
                 with torch.cuda.amp.autocast():
                     output, loss = _train(net, loss_fn, input_, target, amp_enabled=True)
             else:
                 output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
-            print(f"{epoch=}, {b=} : loss={loss.item()}")
+            print(f"{epoch=}, {b=}, {stage=} : loss={loss.item()}")
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
 
             if (new_scale := scaler.get_scale()) != scale:
-                print(f"{epoch=}, {b=} : scale changed from {scale} to {new_scale}")
+                print(f"{epoch=}, {b=}, {stage=} : scale changed from {scale} to {new_scale}")
                 scale = new_scale
 
             # Inspect/modify gradients (e.g., clipping) may be done here
@@ -115,7 +172,7 @@ def time_training(
             scaler.unscale_(opt)
             if scaler.is_enabled():
                 if found_inf := int(sum(scaler._found_inf_per_device(opt).values()).item()):
-                    print(f"{epoch=}, {b=} : {found_inf=}")
+                    print(f"{epoch=}, {b=}, {stage=} : {found_inf=}")
             # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             scaler.step(opt)
             scaler.update()
@@ -156,28 +213,16 @@ def main(
     epochs=EPOCHS,
     checkpoint=False,
 ):
-    # Creates data in default precision.
-    # The same data is used for both default and mixed precision trials below.
-    # You don't need to manually change inputs' dtype when enabling mixed precision.
-    data = [
-        torch.randn(batch_size, in_size, device="cuda")
-        for _ in range(num_batches)]
-    targets = [
-        torch.randn(batch_size, out_size, device="cuda")
-        for _ in range(num_batches)
-    ]
-
-    data[BIG_BATCH_NB-1] = data[BIG_BATCH_NB-1] + LARGEST_NORM#/INIT_SCALE
-    #data[TINY_BATCH_NB-1] = data[TINY_BATCH_NB-1] * SMALLEST_POS_SUBNORM/INIT_SCALE
+    data_loader = get_data_loader()
 
     loss_fn = torch.nn.MSELoss().cuda()
 
-    default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False)
+    default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False)
     if checkpoint:
-        default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, False, default_cp)
-    mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True)
+        default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False, default_cp)
+    mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, True)
     if checkpoint:
-        mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data, targets, True, mixed_cp)
+        mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, True, mixed_cp)
 
 
 if __name__ == "__main__":
