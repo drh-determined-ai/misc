@@ -61,7 +61,7 @@ class MyDataset(onevar.OnesDataset):
 
 
 def get_data_loader() -> torch.utils.data.DataLoader:
-    dataset = MyDataset([5, 1, 4], ["ones", "large", "ones"])
+    dataset = MyDataset([5, 1, 4, 1, 4, 1, 4], ["one", "large", "one", "small", "one", "zero", "one"])
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=1)
     return data_loader
 
@@ -131,6 +131,8 @@ def time_training(
             growth_interval=GROWTH_INTERVAL,
             enabled=amp_enabled,
     )
+    if amp_enabled:
+        print(f"Created and enabled GradScaler with {INIT_SCALE=} and {GROWTH_INTERVAL=}")
 
     if checkpoint is not None:
         print("\nReloading checkpoint...")
@@ -146,19 +148,20 @@ def time_training(
     for epoch in range(1, 1+epochs):
         for b, ((input_, target),) in enumerate(zip(data_loader), 1):
             stage = data_loader.dataset._get_stage(b-1)
-            print(f"{epoch=}, {b=}, {stage=} : input={input_.item()}, target={target.item()}")
+            log_prefix = f"{epoch=}, {b=}, {stage=} :"
+            print(f"{log_prefix} input={input_.item()}, target={target.item()}")
             if amp_enabled:
                 with torch.cuda.amp.autocast():
                     output, loss = _train(net, loss_fn, input_, target, amp_enabled=True)
             else:
                 output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
-            print(f"{epoch=}, {b=}, {stage=} : loss={loss.item()}")
+            print(f"{log_prefix} loss={loss.item()}")
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
 
             if (new_scale := scaler.get_scale()) != scale:
-                print(f"{epoch=}, {b=}, {stage=} : scale changed from {scale} to {new_scale}")
+                print(f"{log_prefix} scale changed from {scale} to {new_scale}")
                 scale = new_scale
 
             # Inspect/modify gradients (e.g., clipping) may be done here
@@ -172,7 +175,7 @@ def time_training(
             scaler.unscale_(opt)
             if scaler.is_enabled():
                 if found_inf := int(sum(scaler._found_inf_per_device(opt).values()).item()):
-                    print(f"{epoch=}, {b=}, {stage=} : {found_inf=}")
+                    print(f"{log_prefix} {found_inf=}")
             # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             scaler.step(opt)
             scaler.update()
