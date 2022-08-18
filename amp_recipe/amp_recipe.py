@@ -123,9 +123,11 @@ def time_training(
     amp_enabled=True,
     checkpoint=None,
 ):
-    #net = make_model(in_size, out_size, num_layers)
+    start_timer_and_print(f"{'='*80}\n" + ("** Mixed precision start **" if amp_enabled else "** Default precision start **"))
     net = torch.nn.Linear(1, 1, bias=False).cuda()
-    opt = torch.optim.SGD(net.parameters(), lr=0.001)
+    # Manually initialize the weight to 0.
+    net.weight.data.fill_(0)
+    opt = torch.optim.SGD(net.parameters(), lr=LR)
     scaler = torch.cuda.amp.GradScaler(
             init_scale=INIT_SCALE,
             growth_interval=GROWTH_INTERVAL,
@@ -144,24 +146,35 @@ def time_training(
     # So we can check for changes in the scale factor
     scale = scaler.get_scale()
 
-    start_timer_and_print("** Mixed precision start **" if amp_enabled else "** Default precision start **")
     for epoch in range(1, 1+epochs):
+        print("="*80)
+        print(f"Epoch {epoch}")
         for b, ((input_, target),) in enumerate(zip(data_loader), 1):
+            batch_prefix = "    "
+            print(batch_prefix + "-"*(80-len(batch_prefix)))
             stage = data_loader.dataset._get_stage(b-1)
-            log_prefix = f"{epoch=}, {b=}, {stage=} :"
-            print(f"{log_prefix} input={input_.item()}, target={target.item()}")
+            print(f"{batch_prefix}Batch {b} ({stage.upper()})")
+            step_prefix = 2*batch_prefix
+            print(f"{step_prefix}input={input_.item()}, target={target.item()}")
+
+            # From determined.harness.tests.experiment.fixtures.pytorch_onevar_model
+            w_before = net.weight.data.item()
+            loss_exp = (target.item() - input_.item() * w_before) ** 2
+            w_exp = w_before + 2 * LR * input_.item() * (target.item() - (input_.item() * w_before))
+
             if amp_enabled:
                 with torch.cuda.amp.autocast():
                     output, loss = _train(net, loss_fn, input_, target, amp_enabled=True)
             else:
                 output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
-            print(f"{log_prefix} loss={loss.item()}")
+            print(f"{step_prefix}{loss_exp=}")
+            print(f"{step_prefix}loss    ={loss.item()}")
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaler.scale(loss).backward()
 
             if (new_scale := scaler.get_scale()) != scale:
-                print(f"{log_prefix} scale changed from {scale} to {new_scale}")
+                print(f"{step_prefix}scale changed from {scale} to {new_scale}")
                 scale = new_scale
 
             # Inspect/modify gradients (e.g., clipping) may be done here
@@ -175,13 +188,32 @@ def time_training(
             scaler.unscale_(opt)
             if scaler.is_enabled():
                 if found_inf := int(sum(scaler._found_inf_per_device(opt).values()).item()):
-                    print(f"{log_prefix} {found_inf=}")
+                    print(f"{step_prefix}{found_inf=}")
             # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             scaler.step(opt)
             scaler.update()
             opt.zero_grad(
                 set_to_none=True  # can modestly improve performance
             )
+
+            # From determined.harness.tests.experiment.fixtures.pytorch_onevar_model
+            print(f"{step_prefix}Weight was {w_before}")
+            w_after = net.weight.data.item()
+            if w_after == w_exp:
+                if w_after == w_before:
+                    print(f"{step_prefix}Weight did not change as expected")
+                else:
+                    print(f"{step_prefix}Weight changed to {w_after} as expected")
+            else:
+                if w_after == w_before:
+                    print(f"{step_prefix}Weight was expected to change to {w_exp} but did not change")
+                else:
+                    Δw_abserr = w_after - w_exp
+                    print(f"{step_prefix}Weight was expected to change to {w_exp} but actually changed to {w_after}, {Δw_abserr=:.0e}")
+
+        # end batch loop
+    # end epoch loop
+
     end_timer_and_print("** Mixed precision end **" if amp_enabled else "** Default precision end**")
     checkpoint = {
         "model": net.state_dict(),
@@ -192,11 +224,12 @@ def time_training(
     return checkpoint
 
 
+LR = 0.001
 BATCH_SIZE = 512//4
 SIZE = 4096//1000
 NUM_LAYERS = 3
 NUM_BATCHES = 10
-EPOCHS = 15
+EPOCHS = 1
 
 # One-indexed
 BIG_BATCH_NB = 5
