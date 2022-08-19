@@ -161,7 +161,7 @@ def time_training(
     print("="*80)
     for epoch in range(1, 1+epochs):
         print(f"Epoch {epoch}")
-        loss_prev = None
+        loss_prev, loss_prev_batch = None, None
         batch_prefix = "    "  # Indent
         print(batch_prefix + "-"*(80-len(batch_prefix)))
         for b, ((input_, target),) in enumerate(zip(data_loader)):
@@ -223,9 +223,9 @@ def time_training(
             growth_countdown -= 1
 
             if loss_prev is not None:
-                print(f"{step_prefix}Previous loss = {loss_prev.item()}")
+                print(f"{step_prefix}Previous loss = {loss_prev.item()} (batch {loss_prev_batch+1})")
             print(f"{step_prefix}Expected loss = {loss_exp}")
-            print(f"{step_prefix}Actual loss   = {loss.item()}")
+            print(f"{step_prefix}Actual   loss = {loss.item()}")
             if loss_prev is not None:
                 if loss < loss_prev:
                     loss_msg = f"{step_prefix}Loss decreased monotonically" + (" as expected" if stage == "one" else " (is this correct???)")
@@ -236,7 +236,7 @@ def time_training(
             if stage == "one":
                 if loss_prev is not None:
                     print(loss_msg)
-                loss_prev = loss
+                loss_prev, loss_prev_batch = loss, b
             else:
                 print(f"{step_prefix}Ignoring this batch's loss for comparison")
 
@@ -244,7 +244,7 @@ def time_training(
             w_after = net.weight.data.item()
             print(f"{step_prefix}Previous weight = {w_before}")
             print(f"{step_prefix}Expected weight = {w_exp}")
-            print(f"{step_prefix}Actual weight   = {w_after}")
+            print(f"{step_prefix}Actual   weight = {w_after}")
             if w_after == w_exp:
                 if w_after == w_before:
                     print(f"{step_prefix}Weight is unchanged as expected")
@@ -255,7 +255,7 @@ def time_training(
                     print(f"{step_prefix}Weight was expected to change but did not!")
                 else:
                     Δw_abserr = w_after - w_exp
-                    print(f"{step_prefix}{Δw_abserr       =: .0e}")
+                    print(f"{step_prefix}{Δw_abserr       =: .1e}")
             print(batch_prefix + "-"*(80-len(batch_prefix)))
         # end batch loop
         print("="*80)
@@ -297,7 +297,7 @@ def main(
 
     loss_fn = torch.nn.MSELoss().cuda()
 
-    #default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False)
+    default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False)
     if checkpoint:
         default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False, default_cp)
     mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, True)
