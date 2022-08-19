@@ -102,15 +102,6 @@ def end_timer_and_print(local_msg):
     )
     print(local_msg)
 
-
-def make_model(in_size, out_size, num_layers):
-    layers = []
-    for _ in range(num_layers - 1):
-        layers.append(torch.nn.Linear(in_size, in_size))
-        layers.append(torch.nn.ReLU())
-    layers.append(torch.nn.Linear(in_size, out_size))
-    return torch.nn.Sequential(*tuple(layers)).cuda()
-
 def _train(net, loss_fn, input_, target, amp_enabled=False):
     output = net(input_)
     loss = loss_fn(output, target)
@@ -125,9 +116,6 @@ def _train(net, loss_fn, input_, target, amp_enabled=False):
     return output, loss
 
 def time_training(
-    in_size,
-    out_size,
-    num_layers,
     epochs,
     loss_fn,
     data_loader,
@@ -273,8 +261,6 @@ def time_training(
 
 LR = 0.01
 BATCH_SIZE = 512//4
-SIZE = 4096//1000
-NUM_LAYERS = 3
 NUM_BATCHES = 10
 EPOCHS = 1
 
@@ -286,10 +272,6 @@ GROWTH_INTERVAL = 4  # 2000
 
 def main(
     batch_size=BATCH_SIZE,
-    in_size=SIZE,
-    out_size=SIZE,
-    num_layers=NUM_LAYERS,
-    num_batches=NUM_BATCHES,
     epochs=EPOCHS,
     checkpoint=False,
 ):
@@ -297,12 +279,12 @@ def main(
 
     loss_fn = torch.nn.MSELoss().cuda()
 
-    default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False)
+    default_cp = time_training(epochs, loss_fn, data_loader, False)
     if checkpoint:
-        default_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, False, default_cp)
-    mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, True)
+        default_cp = time_training(epochs, loss_fn, data_loader, False, default_cp)
+    mixed_cp = time_training(epochs, loss_fn, data_loader, True)
     if checkpoint:
-        mixed_cp = time_training(in_size, out_size, num_layers, epochs, loss_fn, data_loader, True, mixed_cp)
+        mixed_cp = time_training(epochs, loss_fn, data_loader, True, mixed_cp)
 
 
 if __name__ == "__main__":
