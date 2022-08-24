@@ -144,7 +144,7 @@ def time_training(
 
     # So we can check for changes in the scale factor
     scale = scaler.get_scale()
-    growth_countdown = GROWTH_INTERVAL-1
+    growth_countdown = GROWTH_INTERVAL
 
     print("="*80)
     for epoch in range(1, 1+epochs):
@@ -170,7 +170,8 @@ def time_training(
                 output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
 
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
-            scaler.scale(loss).backward()
+            scaled_loss = scaler.scale(loss)
+            scaled_loss.backward()
 
             # Inspect/modify gradients (e.g., clipping) may be done here
 
@@ -193,6 +194,7 @@ def time_training(
                 set_to_none=True  # can modestly improve performance
             )
 
+            growth_countdown -= 1
             if (new_scale := scaler.get_scale()) != scale:
                 if new_scale < scale:
                     print(
@@ -208,12 +210,12 @@ def time_training(
                     print(growth_msg)
                 scale = new_scale
                 growth_countdown = GROWTH_INTERVAL
-            growth_countdown -= 1
 
             if loss_prev is not None:
                 print(f"{step_prefix}Previous loss = {loss_prev.item()} (batch {loss_prev_batch+1})")
             print(f"{step_prefix}Expected loss = {loss_exp}")
             print(f"{step_prefix}Actual   loss = {loss.item()}")
+            print(f"{step_prefix}Scaled   loss = {scaled_loss.item()}")
             if loss_prev is not None:
                 if loss < loss_prev:
                     loss_msg = f"{step_prefix}Loss decreased monotonically" + (" as expected" if stage == "one" else " (is this correct???)")
@@ -267,7 +269,7 @@ EPOCHS = 1
 
 SMALLEST_POS_SUBNORM = 2e-14 / 1024
 LARGEST_NORM = 65504
-INIT_SCALE = 8.0  # 65536.0
+INIT_SCALE = 65536.0
 GROWTH_INTERVAL = 4  # 2000
 
 def main(
