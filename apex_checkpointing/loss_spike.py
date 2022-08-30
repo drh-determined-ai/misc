@@ -5,7 +5,6 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR100
 import torchvision.transforms as transforms
-import test_tube
 import numpy as np
 
 import pytorch_lightning as pl
@@ -77,18 +76,11 @@ class CIFAR100LM(pl.LightningModule):
 
 def main(*args, **kwargs):
 
-    log_path = "./logs"
-    exp = test_tube.Experiment(
-        name="apex_bug_test", save_dir=log_path, autosave=False, description="amp test"
-    )
-    exp.save()
-
     data_path = "/data/CIFAR100"
     model = CIFAR100LM(data_path)
     trainer = pl.Trainer(
         gpus=[0, 1],
-        use_amp=True,
-        experiment=exp,
+        amp_backend="apex",
         min_nb_epochs=200,
         distributed_backend="ddp",
     )
