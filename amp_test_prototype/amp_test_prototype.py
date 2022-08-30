@@ -169,6 +169,7 @@ def time_training(
             else:
                 output, loss = _train(net, loss_fn, input_, target, amp_enabled=False)
 
+            print(f"output dtype is {output.dtype}")
             # Backward ops run in the same dtype autocast chose for corresponding forward ops.
             scaled_loss = scaler.scale(loss)
             scaled_loss.backward()
@@ -199,7 +200,7 @@ def time_training(
                 if new_scale < scale:
                     print(
                         f"{step_prefix}scale reduced from {scale} to {new_scale} " +
-                        ("as expected" if stage == "large" else ", but not as expected")
+                        ("as expected" if scaled_loss >= 32760 else ", but not as expected")
                     )
                 else:
                     growth_msg = f"{step_prefix}scale grew from {scale} to {new_scale}"
