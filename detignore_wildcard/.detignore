@@ -1,1 +1,4 @@
 /dir/*
+
+.gitignore
+context_files.py
